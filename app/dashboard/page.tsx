@@ -598,7 +598,9 @@ export default function DashboardPage() {
       weeklyFastData.length === 0
         ? "No fasting history yet."
         : weeklyFastData
-            .map((day) => `- ${day.day} (${day.fullLabel}): ${day.fastingHours} hours`)
+            .map(
+              (day) => `- ${day.day} (${day.fullLabel}): ${day.fastingHours} hours`
+            )
             .join("\n");
 
     const weightLines =
@@ -638,7 +640,7 @@ Meals:
 ${mealLines}
 
 This week (Sunday to Saturday) fasting totals:
-${weeklyLines}
+${weeklyFastData.length === 0 ? "No fasting history yet." : weeklyLines}
 
 Weight log:
 ${weightLines}
@@ -852,8 +854,13 @@ Can I still eat dinner? How am I doing today?`;
               Fasting hours for the current week, Sunday through Saturday.
             </p>
 
-            <div className="mt-6 h-72">
-              <ResponsiveContainer width="100%" height="100%">
+            <div className="mt-6 h-[288px] min-h-[288px] w-full">
+              <ResponsiveContainer
+                width="100%"
+                height="100%"
+                minWidth={300}
+                minHeight={288}
+              >
                 <LineChart data={weeklyFastData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
                   <XAxis dataKey="day" stroke="#94a3b8" />
@@ -913,8 +920,13 @@ Can I still eat dinner? How am I doing today?`;
               Save Weight
             </button>
 
-            <div className="mt-6 h-64">
-              <ResponsiveContainer width="100%" height="100%">
+            <div className="mt-6 h-[256px] min-h-[256px] w-full">
+              <ResponsiveContainer
+                width="100%"
+                height="100%"
+                minWidth={300}
+                minHeight={256}
+              >
                 <LineChart data={weightChartData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
                   <XAxis dataKey="label" stroke="#94a3b8" />
@@ -952,8 +964,12 @@ Can I still eat dinner? How am I doing today?`;
                     className="flex items-center justify-between rounded-2xl bg-slate-950 p-4"
                   >
                     <div>
-                      <div className="font-medium text-white">{entry.weight} lbs</div>
-                      <div className="text-sm text-slate-400">{entry.date}</div>
+                      <div className="font-medium text-white">
+                        {entry.weight} lbs
+                      </div>
+                      <div className="text-sm text-slate-400">
+                        {entry.date}
+                      </div>
                     </div>
                     <button
                       onClick={() => deleteWeightEntry(entry.id)}
