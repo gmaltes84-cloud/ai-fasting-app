@@ -68,6 +68,18 @@ function getStartOfWeekSunday(date: Date) {
   return start;
 }
 
+function getStartOfDay(date: Date) {
+  const result = new Date(date);
+  result.setHours(0, 0, 0, 0);
+  return result;
+}
+
+function getEndOfDay(date: Date) {
+  const result = new Date(date);
+  result.setHours(23, 59, 59, 999);
+  return result;
+}
+
 type Meal = {
   id: string;
   name: string;
@@ -79,7 +91,6 @@ type FastRecord = {
   start: number;
   end: number;
   durationHours: number;
-  dayKey: string;
 };
 
 type WeightEntry = {
@@ -127,12 +138,10 @@ export default function DashboardPage() {
 
   const [isFasting, setIsFasting] = useState(true);
   const [fastStart, setFastStart] = useState(Date.now() - 6 * 60 * 60 * 1000);
-  const [fastStartInput, setFastStartInput] = useState("");
-  const [fastStopInput, setFastStopInput] = useState("");
   const [goalHours] = useState(16);
 
-  const [previousFastStartInput, setPreviousFastStartInput] = useState("");
-  const [previousFastEndInput, setPreviousFastEndInput] = useState("");
+  const [backdatedFastStartInput, setBackdatedFastStartInput] = useState("");
+  const [backdatedFastEndInput, setBackdatedFastEndInput] = useState("");
 
   const [calorieGoal] = useState(2200);
   const [now, setNow] = useState(Date.now());
@@ -166,16 +175,14 @@ export default function DashboardPage() {
       : Date.now() - 6 * 60 * 60 * 1000;
 
     setFastStart(initialFastStart);
-    setFastStartInput(formatDateTimeLocal(new Date(initialFastStart)));
-    setFastStopInput(formatDateTimeLocal(new Date()));
 
-    const defaultPreviousEnd = new Date();
-    const defaultPreviousStart = new Date(
-      defaultPreviousEnd.getTime() - 16 * 60 * 60 * 1000
+    const defaultBackdatedEnd = new Date();
+    const defaultBackdatedStart = new Date(
+      defaultBackdatedEnd.getTime() - 16 * 60 * 60 * 1000
     );
 
-    setPreviousFastStartInput(formatDateTimeLocal(defaultPreviousStart));
-    setPreviousFastEndInput(formatDateTimeLocal(defaultPreviousEnd));
+    setBackdatedFastStartInput(formatDateTimeLocal(defaultBackdatedStart));
+    setBackdatedFastEndInput(formatDateTimeLocal(defaultBackdatedEnd));
 
     const savedMeals = localStorage.getItem("meals");
     if (savedMeals) {
@@ -201,7 +208,6 @@ export default function DashboardPage() {
 
     const timer = setInterval(() => {
       setNow(Date.now());
-      setFastStopInput((current) => current || formatDateTimeLocal(new Date()));
     }, 30000);
 
     return () => clearInterval(timer);
@@ -217,29 +223,53 @@ export default function DashboardPage() {
 
   const remainingCalories = calorieGoal - totalCalories;
 
+  const currentWeekStart = useMemo(
+    () => getStartOfWeekSunday(new Date()),
+    [now]
+  );
+
   const weeklyFastData = useMemo(() => {
-    const startOfWeek = getStartOfWeekSunday(new Date());
     const result: { day: string; fastingHours: number; fullLabel: string }[] =
       [];
 
     for (let i = 0; i < 7; i++) {
-      const date = new Date(startOfWeek);
-      date.setDate(startOfWeek.getDate() + i);
+      const currentDate = new Date(currentWeekStart);
+      currentDate.setDate(currentWeekStart.getDate() + i);
 
-      const dayKey = getDateKey(date);
-      const totalForDay = fastHistory
-        .filter((record) => record.dayKey === dayKey)
-        .reduce((sum, record) => sum + record.durationHours, 0);
+      const dayStart = getStartOfDay(currentDate).getTime();
+      const dayEnd = getEndOfDay(currentDate).getTime();
+
+      let totalMsForDay = 0;
+
+      for (const record of fastHistory) {
+        const overlapStart = Math.max(record.start, dayStart);
+        const overlapEnd = Math.min(record.end, dayEnd);
+
+        if (overlapEnd > overlapStart) {
+          totalMsForDay += overlapEnd - overlapStart;
+        }
+      }
 
       result.push({
-        day: formatShortDayLabel(date),
-        fastingHours: Number(totalForDay.toFixed(1)),
-        fullLabel: formatMonthDay(date),
+        day: formatShortDayLabel(currentDate),
+        fastingHours: Number((totalMsForDay / (1000 * 60 * 60)).toFixed(1)),
+        fullLabel: formatMonthDay(currentDate),
       });
     }
 
     return result;
-  }, [fastHistory]);
+  }, [fastHistory, currentWeekStart]);
+
+  const weekStartMs = currentWeekStart.getTime();
+  const weekEndMs = new Date(currentWeekStart).setDate(
+    currentWeekStart.getDate() + 7
+  );
+
+  const currentWeekFastRecords = useMemo(() => {
+    return fastHistory.filter(
+      (record) => record.end > weekStartMs && record.start < weekEndMs
+    );
+  }, [fastHistory, weekStartMs, weekEndMs]);
 
   const sortedFastHistory = useMemo(() => {
     return [...fastHistory].sort((a, b) => b.end - a.end);
@@ -261,11 +291,12 @@ export default function DashboardPage() {
   }, [sortedWeightHistory]);
 
   const progressStats = useMemo(() => {
-    const totalFasts = fastHistory.length;
+    const weeklyCompletedFasts = currentWeekFastRecords.length;
+
     const longestFast =
-      totalFasts === 0
+      weeklyCompletedFasts === 0
         ? 0
-        : Math.max(...fastHistory.map((record) => record.durationHours));
+        : Math.max(...currentWeekFastRecords.map((record) => record.durationHours));
 
     const totalWeeklyHours = weeklyFastData.reduce(
       (sum, day) => sum + day.fastingHours,
@@ -273,10 +304,12 @@ export default function DashboardPage() {
     );
 
     const averageFast =
-      totalFasts === 0
+      weeklyCompletedFasts === 0
         ? 0
-        : fastHistory.reduce((sum, record) => sum + record.durationHours, 0) /
-          totalFasts;
+        : currentWeekFastRecords.reduce(
+            (sum, record) => sum + record.durationHours,
+            0
+          ) / weeklyCompletedFasts;
 
     const firstWeight = sortedWeightHistory[0]?.weight ?? null;
     const latestWeight =
@@ -288,15 +321,14 @@ export default function DashboardPage() {
         : null;
 
     return {
-      totalFasts,
+      weeklyCompletedFasts,
       longestFast: Number(longestFast.toFixed(1)),
       totalWeeklyHours: Number(totalWeeklyHours.toFixed(1)),
       averageFast: Number(averageFast.toFixed(1)),
-      firstWeight,
       latestWeight,
       weightChange,
     };
-  }, [fastHistory, weeklyFastData, sortedWeightHistory]);
+  }, [currentWeekFastRecords, weeklyFastData, sortedWeightHistory]);
 
   function saveMeals(updated: Meal[]) {
     setMeals(updated);
@@ -391,8 +423,6 @@ export default function DashboardPage() {
 
     setIsFasting(true);
     setFastStart(currentNow);
-    setFastStartInput(formatDateTimeLocal(new Date(currentNow)));
-    setFastStopInput(formatDateTimeLocal(new Date(currentNow)));
 
     localStorage.setItem("isFasting", "true");
     localStorage.setItem("fastStart", String(currentNow));
@@ -420,7 +450,6 @@ export default function DashboardPage() {
       start: fastStart,
       end: endTime,
       durationHours: Number(durationHours.toFixed(1)),
-      dayKey: getDateKey(new Date(endTime)),
     };
 
     const updatedHistory = [...fastHistory, record];
@@ -428,117 +457,42 @@ export default function DashboardPage() {
 
     setIsFasting(false);
     localStorage.setItem("isFasting", "false");
-    setFastStopInput(formatDateTimeLocal(new Date(endTime)));
 
     setAiReply(
-      `Fast stopped. Logged ${record.durationHours} hours for ${formatShortDayLabel(
-        new Date(endTime)
+      `Fast stopped. Logged ${record.durationHours} hours ending ${formatReadableDateTime(
+        endTime
       )}.`
     );
   }
 
-  function saveCustomFastStart() {
-    if (!fastStartInput) return;
-
-    const parsed = new Date(fastStartInput).getTime();
-
-    if (!Number.isFinite(parsed)) return;
-
-    if (parsed > Date.now()) {
-      setAiReply("Fast start time cannot be in the future.");
-      return;
-    }
-
-    setIsFasting(true);
-    setFastStart(parsed);
-
-    localStorage.setItem("isFasting", "true");
-    localStorage.setItem("fastStart", String(parsed));
-
-    setNow(Date.now());
-    setAiReply("Fast start time updated.");
-  }
-
-  function saveCustomFastStop() {
-    if (!isFasting) {
-      setAiReply("You are not currently fasting.");
-      return;
-    }
-
-    if (!fastStopInput) {
-      setAiReply("Please choose a stop time.");
-      return;
-    }
-
-    const parsedStop = new Date(fastStopInput).getTime();
-
-    if (!Number.isFinite(parsedStop)) {
-      setAiReply("Stop time is not valid.");
-      return;
-    }
-
-    if (parsedStop > Date.now()) {
-      setAiReply("Fast stop time cannot be in the future.");
-      return;
-    }
-
-    if (parsedStop <= fastStart) {
-      setAiReply("Fast stop time must be after the fast start time.");
-      return;
-    }
-
-    const durationHours = (parsedStop - fastStart) / (1000 * 60 * 60);
-
-    const record: FastRecord = {
-      id: crypto.randomUUID(),
-      start: fastStart,
-      end: parsedStop,
-      durationHours: Number(durationHours.toFixed(1)),
-      dayKey: getDateKey(new Date(parsedStop)),
-    };
-
-    const updatedHistory = [...fastHistory, record];
-    saveFastHistory(updatedHistory);
-
-    setIsFasting(false);
-    localStorage.setItem("isFasting", "false");
-    setNow(parsedStop);
-
-    setAiReply(
-      `Backdated fast stop saved. Logged ${record.durationHours} hours for ${formatShortDayLabel(
-        new Date(parsedStop)
-      )}.`
-    );
-  }
-
-  function addPreviousFast() {
-    if (!previousFastStartInput || !previousFastEndInput) {
+  function addBackdatedFast() {
+    if (!backdatedFastStartInput || !backdatedFastEndInput) {
       setAiReply("Please choose both a start time and end time.");
       return;
     }
 
-    const parsedStart = new Date(previousFastStartInput).getTime();
-    const parsedEnd = new Date(previousFastEndInput).getTime();
+    const parsedStart = new Date(backdatedFastStartInput).getTime();
+    const parsedEnd = new Date(backdatedFastEndInput).getTime();
 
     if (!Number.isFinite(parsedStart) || !Number.isFinite(parsedEnd)) {
-      setAiReply("Previous fast dates are not valid.");
+      setAiReply("Backdated fast dates are not valid.");
       return;
     }
 
     if (parsedStart >= parsedEnd) {
-      setAiReply("Previous fast end time must be after the start time.");
+      setAiReply("Backdated fast end time must be after the start time.");
       return;
     }
 
     if (parsedEnd > Date.now()) {
-      setAiReply("Previous fast end time cannot be in the future.");
+      setAiReply("Backdated fast end time cannot be in the future.");
       return;
     }
 
     const durationHours = (parsedEnd - parsedStart) / (1000 * 60 * 60);
 
     if (durationHours <= 0) {
-      setAiReply("Previous fast duration is too short to save.");
+      setAiReply("Backdated fast duration is too short to save.");
       return;
     }
 
@@ -547,16 +501,15 @@ export default function DashboardPage() {
       start: parsedStart,
       end: parsedEnd,
       durationHours: Number(durationHours.toFixed(1)),
-      dayKey: getDateKey(new Date(parsedEnd)),
     };
 
     const updatedHistory = [...fastHistory, record];
     saveFastHistory(updatedHistory);
 
     setAiReply(
-      `Previous fast added: ${record.durationHours} hours ending ${formatReadableDateTime(
-        parsedEnd
-      )}.`
+      `Backdated fast added: ${record.durationHours} hours from ${formatReadableDateTime(
+        parsedStart
+      )} to ${formatReadableDateTime(parsedEnd)}.`
     );
   }
 
@@ -591,13 +544,11 @@ export default function DashboardPage() {
           : " No weight logged yet.";
 
       setAiReply(
-        `You have ${
-          isFasting ? `fasted for ${formatDuration(fastMs)}` : "ended your fast"
-        }, logged ${totalCalories} calories today, and completed ${
-          progressStats.totalFasts
-        } total fasts. Your average fast is ${
+        `This week you have completed ${
+          progressStats.weeklyCompletedFasts
+        } fasts, logged ${progressStats.totalWeeklyHours} fasting hours, and averaged ${
           progressStats.averageFast
-        } hours and your longest fast is ${
+        } hours per fast. Your longest fast this week is ${
           progressStats.longestFast
         } hours.${weightMessage}`
       );
@@ -630,7 +581,7 @@ export default function DashboardPage() {
         );
       } else {
         setAiReply(
-          "You are not currently fasting. Press Start Fast Now to begin a new fast."
+          `This week you have logged ${progressStats.totalWeeklyHours} fasting hours across ${progressStats.weeklyCompletedFasts} completed fasts.`
         );
       }
       return;
@@ -658,9 +609,7 @@ export default function DashboardPage() {
     }
 
     setAiReply(
-      `Based on your current data, you have ${
-        isFasting ? `fasted for ${formatDuration(fastMs)}` : "ended your fast"
-      }, eaten ${totalCalories} calories, and have ${
+      `This week you have logged ${progressStats.totalWeeklyHours} fasting hours, eaten ${totalCalories} calories today, and have ${
         remainingCalories >= 0 ? remainingCalories : 0
       } calories left today.`
     );
@@ -670,9 +619,7 @@ export default function DashboardPage() {
     const mealLines =
       meals.length === 0
         ? "No meals logged yet."
-        : meals
-            .map((meal) => `- ${meal.name}: ${meal.calories} calories`)
-            .join("\n");
+        : meals.map((meal) => `- ${meal.name}: ${meal.calories} calories`).join("\n");
 
     const weeklyLines =
       weeklyFastData.length === 0
@@ -700,10 +647,10 @@ Calories eaten today: ${totalCalories}
 Calorie goal: ${calorieGoal}
 Remaining calories: ${remainingCalories >= 0 ? remainingCalories : 0}
 
-Progress report:
-- Total completed fasts: ${progressStats.totalFasts}
-- Average fast: ${progressStats.averageFast} hours
-- Longest fast: ${progressStats.longestFast} hours
+Progress report for this week:
+- Completed fasts this week: ${progressStats.weeklyCompletedFasts}
+- Average fast this week: ${progressStats.averageFast} hours
+- Longest fast this week: ${progressStats.longestFast} hours
 - Current week fasting total: ${progressStats.totalWeeklyHours} hours
 - Latest weight: ${
       progressStats.latestWeight !== null
@@ -725,7 +672,7 @@ ${weeklyLines}
 Weight log:
 ${weightLines}
 
-Can I still eat dinner? How am I doing today?`;
+Can I still eat dinner? How am I doing this week?`;
 
     navigator.clipboard.writeText(summary);
     setAiReply("Copied! Paste into ChatGPT.");
@@ -746,7 +693,7 @@ Can I still eat dinner? How am I doing today?`;
           <h1 className="text-4xl font-bold">Dashboard</h1>
           <p className="mt-2 text-slate-300">
             Track your fasting time, log your calories, log your weight, review
-            your progress, and add previous fasts.
+            your progress, and backdate completed fasts.
           </p>
         </div>
 
@@ -775,42 +722,6 @@ Can I still eat dinner? How am I doing today?`;
                 className="rounded-2xl border border-slate-600 px-5 py-3 font-medium hover:bg-slate-800"
               >
                 Stop Fasting Now
-              </button>
-            </div>
-
-            <div className="mt-6">
-              <label className="mb-2 block text-sm font-medium text-slate-300">
-                Edit current fast start time
-              </label>
-              <input
-                type="datetime-local"
-                value={fastStartInput}
-                onChange={(e) => setFastStartInput(e.target.value)}
-                className="w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none"
-              />
-              <button
-                onClick={saveCustomFastStart}
-                className="mt-3 rounded-2xl border border-cyan-600 px-4 py-2 hover:bg-cyan-600/10"
-              >
-                Save Fast Start Time
-              </button>
-            </div>
-
-            <div className="mt-6">
-              <label className="mb-2 block text-sm font-medium text-slate-300">
-                Edit current fast stop time
-              </label>
-              <input
-                type="datetime-local"
-                value={fastStopInput}
-                onChange={(e) => setFastStopInput(e.target.value)}
-                className="w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none"
-              />
-              <button
-                onClick={saveCustomFastStop}
-                className="mt-3 rounded-2xl border border-emerald-600 px-4 py-2 hover:bg-emerald-600/10"
-              >
-                Save Backdated Stop Time
               </button>
             </div>
           </section>
@@ -877,21 +788,23 @@ Can I still eat dinner? How am I doing today?`;
 
             <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-1">
               <div className="rounded-2xl bg-slate-950 p-4">
-                <div className="text-sm text-slate-400">Completed fasts</div>
+                <div className="text-sm text-slate-400">
+                  Completed fasts this week
+                </div>
                 <div className="mt-1 text-3xl font-bold text-white">
-                  {progressStats.totalFasts}
+                  {progressStats.weeklyCompletedFasts}
                 </div>
               </div>
 
               <div className="rounded-2xl bg-slate-950 p-4">
-                <div className="text-sm text-slate-400">Average fast</div>
+                <div className="text-sm text-slate-400">Average fast this week</div>
                 <div className="mt-1 text-3xl font-bold text-white">
                   {progressStats.averageFast} hrs
                 </div>
               </div>
 
               <div className="rounded-2xl bg-slate-950 p-4">
-                <div className="text-sm text-slate-400">Longest fast</div>
+                <div className="text-sm text-slate-400">Longest fast this week</div>
                 <div className="mt-1 text-3xl font-bold text-white">
                   {progressStats.longestFast} hrs
                 </div>
@@ -1066,51 +979,49 @@ Can I still eat dinner? How am I doing today?`;
 
         <div className="mt-6 grid gap-6 lg:grid-cols-2">
           <section className="rounded-3xl border border-slate-800 bg-slate-900 p-6 shadow-sm">
-            <h2 className="text-2xl font-semibold">Log Previous Fast</h2>
+            <h2 className="text-2xl font-semibold">Backdate Fast</h2>
             <p className="mt-2 text-slate-400">
-              Add older fasting sessions by entering the original start and end
-              date/time.
+              Enter a completed fast using the original start and stop date/time.
             </p>
 
             <div className="mt-4 grid gap-3">
               <div>
                 <label className="mb-2 block text-sm font-medium text-slate-300">
-                  Previous fast start
+                  Fast start
                 </label>
                 <input
                   type="datetime-local"
-                  value={previousFastStartInput}
-                  onChange={(e) => setPreviousFastStartInput(e.target.value)}
+                  value={backdatedFastStartInput}
+                  onChange={(e) => setBackdatedFastStartInput(e.target.value)}
                   className="w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none"
                 />
               </div>
 
               <div>
                 <label className="mb-2 block text-sm font-medium text-slate-300">
-                  Previous fast end
+                  Fast stop
                 </label>
                 <input
                   type="datetime-local"
-                  value={previousFastEndInput}
-                  onChange={(e) => setPreviousFastEndInput(e.target.value)}
+                  value={backdatedFastEndInput}
+                  onChange={(e) => setBackdatedFastEndInput(e.target.value)}
                   className="w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none"
                 />
               </div>
             </div>
 
             <button
-              onClick={addPreviousFast}
+              onClick={addBackdatedFast}
               className="mt-4 rounded-2xl bg-violet-600 px-5 py-3 font-medium text-white hover:bg-violet-500"
             >
-              Add Previous Fast
+              Add Backdated Fast
             </button>
           </section>
 
           <section className="rounded-3xl border border-slate-800 bg-slate-900 p-6 shadow-sm">
             <h2 className="text-2xl font-semibold">Fast History</h2>
             <p className="mt-2 text-slate-400">
-              Review previously logged fasts. These entries feed the weekly
-              tracker and progress report.
+              Logged fasts appear here and feed the weekly tracker.
             </p>
 
             <div className="mt-4 space-y-3">
@@ -1120,10 +1031,7 @@ Can I still eat dinner? How am I doing today?`;
                 </div>
               ) : (
                 sortedFastHistory.map((record) => (
-                  <div
-                    key={record.id}
-                    className="rounded-2xl bg-slate-950 p-4"
-                  >
+                  <div key={record.id} className="rounded-2xl bg-slate-950 p-4">
                     <div className="flex items-start justify-between gap-4">
                       <div>
                         <div className="font-medium text-white">
@@ -1194,7 +1102,7 @@ Can I still eat dinner? How am I doing today?`;
             <textarea
               value={aiPrompt}
               onChange={(e) => setAiPrompt(e.target.value)}
-              placeholder="Ask something like: How am I doing today?"
+              placeholder="Ask something like: How am I doing this week?"
               className="mt-4 min-h-[120px] w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none"
             />
 
