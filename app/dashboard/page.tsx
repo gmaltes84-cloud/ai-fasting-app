@@ -44,6 +44,16 @@ function formatMonthDay(date: Date) {
   });
 }
 
+function formatReadableDateTime(timestamp: number) {
+  return new Date(timestamp).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
 function getDateKey(date: Date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(
     2,
@@ -121,6 +131,9 @@ export default function DashboardPage() {
   const [fastStopInput, setFastStopInput] = useState("");
   const [goalHours] = useState(16);
 
+  const [previousFastStartInput, setPreviousFastStartInput] = useState("");
+  const [previousFastEndInput, setPreviousFastEndInput] = useState("");
+
   const [calorieGoal] = useState(2200);
   const [now, setNow] = useState(Date.now());
 
@@ -155,6 +168,14 @@ export default function DashboardPage() {
     setFastStart(initialFastStart);
     setFastStartInput(formatDateTimeLocal(new Date(initialFastStart)));
     setFastStopInput(formatDateTimeLocal(new Date()));
+
+    const defaultPreviousEnd = new Date();
+    const defaultPreviousStart = new Date(
+      defaultPreviousEnd.getTime() - 16 * 60 * 60 * 1000
+    );
+
+    setPreviousFastStartInput(formatDateTimeLocal(defaultPreviousStart));
+    setPreviousFastEndInput(formatDateTimeLocal(defaultPreviousEnd));
 
     const savedMeals = localStorage.getItem("meals");
     if (savedMeals) {
@@ -218,6 +239,10 @@ export default function DashboardPage() {
     }
 
     return result;
+  }, [fastHistory]);
+
+  const sortedFastHistory = useMemo(() => {
+    return [...fastHistory].sort((a, b) => b.end - a.end);
   }, [fastHistory]);
 
   const sortedWeightHistory = useMemo(() => {
@@ -486,6 +511,61 @@ export default function DashboardPage() {
     );
   }
 
+  function addPreviousFast() {
+    if (!previousFastStartInput || !previousFastEndInput) {
+      setAiReply("Please choose both a start time and end time.");
+      return;
+    }
+
+    const parsedStart = new Date(previousFastStartInput).getTime();
+    const parsedEnd = new Date(previousFastEndInput).getTime();
+
+    if (!Number.isFinite(parsedStart) || !Number.isFinite(parsedEnd)) {
+      setAiReply("Previous fast dates are not valid.");
+      return;
+    }
+
+    if (parsedStart >= parsedEnd) {
+      setAiReply("Previous fast end time must be after the start time.");
+      return;
+    }
+
+    if (parsedEnd > Date.now()) {
+      setAiReply("Previous fast end time cannot be in the future.");
+      return;
+    }
+
+    const durationHours = (parsedEnd - parsedStart) / (1000 * 60 * 60);
+
+    if (durationHours <= 0) {
+      setAiReply("Previous fast duration is too short to save.");
+      return;
+    }
+
+    const record: FastRecord = {
+      id: crypto.randomUUID(),
+      start: parsedStart,
+      end: parsedEnd,
+      durationHours: Number(durationHours.toFixed(1)),
+      dayKey: getDateKey(new Date(parsedEnd)),
+    };
+
+    const updatedHistory = [...fastHistory, record];
+    saveFastHistory(updatedHistory);
+
+    setAiReply(
+      `Previous fast added: ${record.durationHours} hours ending ${formatReadableDateTime(
+        parsedEnd
+      )}.`
+    );
+  }
+
+  function deleteFastRecord(id: string) {
+    const updated = fastHistory.filter((record) => record.id !== id);
+    saveFastHistory(updated);
+    setAiReply("Fast history entry deleted.");
+  }
+
   function askCoach() {
     const prompt = aiPrompt.trim().toLowerCase();
 
@@ -640,7 +720,7 @@ Meals:
 ${mealLines}
 
 This week (Sunday to Saturday) fasting totals:
-${weeklyFastData.length === 0 ? "No fasting history yet." : weeklyLines}
+${weeklyLines}
 
 Weight log:
 ${weightLines}
@@ -665,8 +745,8 @@ Can I still eat dinner? How am I doing today?`;
         <div className="mb-8">
           <h1 className="text-4xl font-bold">Dashboard</h1>
           <p className="mt-2 text-slate-300">
-            Track your fasting time, log your calories, log your weight, and
-            review your progress.
+            Track your fasting time, log your calories, log your weight, review
+            your progress, and add previous fasts.
           </p>
         </div>
 
@@ -700,7 +780,7 @@ Can I still eat dinner? How am I doing today?`;
 
             <div className="mt-6">
               <label className="mb-2 block text-sm font-medium text-slate-300">
-                Set fast start time manually
+                Edit current fast start time
               </label>
               <input
                 type="datetime-local"
@@ -718,7 +798,7 @@ Can I still eat dinner? How am I doing today?`;
 
             <div className="mt-6">
               <label className="mb-2 block text-sm font-medium text-slate-300">
-                Manually backdate stop time
+                Edit current fast stop time
               </label>
               <input
                 type="datetime-local"
@@ -977,6 +1057,93 @@ Can I still eat dinner? How am I doing today?`;
                     >
                       Delete
                     </button>
+                  </div>
+                ))
+              )}
+            </div>
+          </section>
+        </div>
+
+        <div className="mt-6 grid gap-6 lg:grid-cols-2">
+          <section className="rounded-3xl border border-slate-800 bg-slate-900 p-6 shadow-sm">
+            <h2 className="text-2xl font-semibold">Log Previous Fast</h2>
+            <p className="mt-2 text-slate-400">
+              Add older fasting sessions by entering the original start and end
+              date/time.
+            </p>
+
+            <div className="mt-4 grid gap-3">
+              <div>
+                <label className="mb-2 block text-sm font-medium text-slate-300">
+                  Previous fast start
+                </label>
+                <input
+                  type="datetime-local"
+                  value={previousFastStartInput}
+                  onChange={(e) => setPreviousFastStartInput(e.target.value)}
+                  className="w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="mb-2 block text-sm font-medium text-slate-300">
+                  Previous fast end
+                </label>
+                <input
+                  type="datetime-local"
+                  value={previousFastEndInput}
+                  onChange={(e) => setPreviousFastEndInput(e.target.value)}
+                  className="w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none"
+                />
+              </div>
+            </div>
+
+            <button
+              onClick={addPreviousFast}
+              className="mt-4 rounded-2xl bg-violet-600 px-5 py-3 font-medium text-white hover:bg-violet-500"
+            >
+              Add Previous Fast
+            </button>
+          </section>
+
+          <section className="rounded-3xl border border-slate-800 bg-slate-900 p-6 shadow-sm">
+            <h2 className="text-2xl font-semibold">Fast History</h2>
+            <p className="mt-2 text-slate-400">
+              Review previously logged fasts. These entries feed the weekly
+              tracker and progress report.
+            </p>
+
+            <div className="mt-4 space-y-3">
+              {sortedFastHistory.length === 0 ? (
+                <div className="rounded-2xl bg-slate-950 p-4 text-slate-400">
+                  No fast history logged yet.
+                </div>
+              ) : (
+                sortedFastHistory.map((record) => (
+                  <div
+                    key={record.id}
+                    className="rounded-2xl bg-slate-950 p-4"
+                  >
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <div className="font-medium text-white">
+                          {record.durationHours} hrs
+                        </div>
+                        <div className="mt-1 text-sm text-slate-400">
+                          Start: {formatReadableDateTime(record.start)}
+                        </div>
+                        <div className="text-sm text-slate-400">
+                          End: {formatReadableDateTime(record.end)}
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={() => deleteFastRecord(record.id)}
+                        className="rounded-xl border border-red-500 px-3 py-1 text-sm text-red-400 hover:bg-red-500 hover:text-white"
+                      >
+                        Delete
+                      </button>
+                    </div>
                   </div>
                 ))
               )}
